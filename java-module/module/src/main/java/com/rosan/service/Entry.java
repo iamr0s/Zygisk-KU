@@ -22,7 +22,6 @@ class Entry {
             socket.close();
 
             file.delete();
-            new File("/data/adb/modules/KeyguardUnlocked/a.log").createNewFile();
         } catch (Throwable e) {
             e.printStackTrace();
         }
