@@ -1,0 +1,110 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+name: Zygisk Module Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        java-version: ["17"]
+        gradle-version: ["current"]
+        ndk-version: ["r21e"]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Workflows Info
+        id: workflows_info
+        run: |
+          echo "::set-output name=sha::$(git rev-parse HEAD)"
+          echo "::set-output name=short_sha::$(git rev-parse --short HEAD)"
+          echo "::set-output name=version_code::$(grep "versionCode=" module/module.prop | cut -d'=' -f2)"
+          echo "::set-output name=version_name::$(grep "version=" module/module.prop | cut -d'=' -f2)"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: "temurin"
+
+      - name: Set up Gradle ${{ matrix.gradle-version }}
+        uses: gradle/gradle-build-action@v2
+        with:
+          gradle-version: ${{ matrix.gradle-version }}
+
+      - name: Set up NDK ${{ matrix.ndk-version }}
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ matrix.ndk-version }}
+          add-to-path: true
+
+      - name: Previous Build java-module
+        run: |
+          chmod +x ./java-module/gradlew
+
+      - name: Previous Build zygisk-module
+        run: |
+          cd ./zygisk-module/module/jni
+          git clone https://github.com/topjohnwu/libcxx.git libcxx
+
+      - name: Build java-module
+        run: |
+          cd ./java-module
+          ./gradlew :module:assembleRelease --stacktrace
+
+      - name: Build zygisk-module
+        run: |
+          cd ./zygisk-module/module
+          ndk-build clean
+          ndk-build
+
+      - name: Build Modules
+        run: |
+          cp ./java-module/module/build/intermediates/dex/release/mergeDexRelease/classes.dex ./module/classes.dex
+          mkdir ./module/zygisk
+          cp ./zygisk-module/module/libs/arm64-v8a/libmain.so ./module/zygisk/arm64-v8a.so
+          cp ./zygisk-module/module/libs/armeabi-v7a/libmain.so ./module/zygisk/armeabi-v7a.so
+          cp ./zygisk-module/module/libs/x86/libmain.so ./module/zygisk/x86.so
+          cp ./zygisk-module/module/libs/x86_64/libmain.so ./module/zygisk/x86_64.so
+          python ./zip.py ./module ./module.zip
+
+      - name: Create A New Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.workflows_info.outputs.version_name }}-${{ github.run_id }}-${{ steps.workflows_info.outputs.short_sha }}
+          release_name: ${{ steps.workflows_info.outputs.version_name }}-${{ github.run_id }}-${{ steps.workflows_info.outputs.short_sha }}
+          body: |
+            ${{ steps.workflows_info.outputs.version_name }}-${{ github.run_id }}-${{ steps.workflows_info.outputs.short_sha }}
+          draft: false
+          prerelease: true
+
+      - name: Upload Magisk Module To Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./module.zip
+          asset_name: ${{ steps.workflows_info.outputs.version_name }}-${{ github.run_id }}-${{ steps.workflows_info.outputs.short_sha }}.zip
+          asset_content_type: application/zip
